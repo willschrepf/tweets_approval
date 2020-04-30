@@ -1,0 +1,221 @@
+---
+title: "ps_8"
+author: "Will Schrepferman"
+date: "4/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, include = FALSE)
+library(tidyverse)
+library(dplyr)
+library(fivethirtyeight)
+library(reprex)
+library(skimr)
+library(ggplot2)
+library(gt)
+library(patchwork)
+library(broom)
+```
+
+## Question 1
+
+```{r q1a}
+poll <- trump_approval_poll
+
+load("tweetsnew.Rdata")
+tweets <- tweets %>%
+  group_by(week) %>%
+  summarize(total_tweets = n())
+
+poll$week <- ceiling(as.numeric(difftime(poll$end_date, "2017-01-01", units = "days"))/7)
+
+# elected to use mutate to remove na's, there is probably
+# a more efficient method, but this worked
+
+comb_data <- left_join(poll, tweets, by = "week") %>%
+  mutate(total_tweets = replace_na(total_tweets, 0))
+
+```
+1A) 
+```{r q1a_output, include = TRUE}
+skim(comb_data, approve, total_tweets)
+```
+
+1B)
+
+```{r q1b, include = TRUE}
+plot_1b <- comb_data %>%
+  select(approve, total_tweets, grade) %>%
+  
+  # found stackoverflow page describing how to use na_level
+  
+  mutate(grade = fct_explicit_na(grade, na_level = "(Missing)")) %>%
+  ggplot(aes(x = total_tweets, y = approve, color = as.factor(grade))) +
+  geom_point() +
+  labs(x = "Total Tweets", y = "Approval Rating", color = "Grade") +
+  theme_classic()
+
+plot_1b
+
+# variable to display correlation coeffecient
+
+cor_coef <- cor(comb_data$approve, comb_data$total_tweets)
+```
+
+The correlation coeffiecient is `r cor_coef`. This indicates there isn't a strong relationship between tweet activity and approval ratings.
+
+## Question 2
+
+
+2A)
+```{r q2a, include = TRUE}
+comb_data %>%
+  
+  # ran into trouble here, had to use map_dbl so regressions would compute
+  
+  mutate(high_q = map_dbl(grade %in% c("A+", "A", "A-"), 1, 0)) %>%
+  lm(formula = approve ~ total_tweets + high_q) %>%
+  tidy(conf.int = TRUE) %>%
+  select(term, estimate, conf.low, conf.high) %>%
+  gt() %>%
+  cols_label(term = "variable", estimate = "Estimate", conf.low = "Lower bound", conf.high = "Upper bound") %>%
+  tab_header(title = "Effect of Number of Tweets and Poll Quality on Reported Approval Rating",
+             subtitle = "Data from fivethirtyeight and Trump Tweet Archive")
+```
+2B)
+The estimated average treatment effect of high_q is -2.35 percentage points to Trump's approval rating. This indicates that a poll being high quality has the predicted effect of having a lower value for Trump's approval rating, holding total tweets in a given week constant. The frequentist interpretation of this number and its confidence interval is that, given an infinite number of simulated regressions, 95% of the computed intervals would contain the true interval. The Bayesian interpretation is that we are 95% sure that the true estimation of the impact of poll quality on approval rating lies in the computed interval.
+
+2c)
+```{r q2c, include = TRUE}
+
+# used same code as 2A, just added a part to the multiregression
+
+comb_data %>%
+  mutate(high_q = map_dbl(grade %in% c("A+", "A", "A-"), 1, 0)) %>%
+  lm(formula = approve ~ total_tweets + high_q + total_tweets*high_q) %>%
+  tidy(conf.int = TRUE) %>%
+  select(term, estimate, conf.low, conf.high) %>%
+  gt() %>%
+  cols_label(term = "variable", estimate = "Estimate", conf.low = "Lower bound", conf.high = "Upper bound") %>%
+  tab_header(title = "Effect of Number of Tweets and Poll Quality on Reported Approval Rating",
+             subtitle = "Data from fivethirtyeight and Trump Tweet Archive") 
+```
+
+2D) 
+```{r q2d, include = TRUE, echo = TRUE}
+calculate_interaction_model <- 41.629177904 + (-.005586465 * 84) + (-2.701455717 * 1) + (84 * .020531555)
+
+calculate_interaction_model
+
+lm_2d <- comb_data %>%
+  mutate(high_q = map_dbl(grade %in% c("A+", "A", "A-"), 1, 0)) %>%
+  lm(formula = approve ~ total_tweets + high_q + total_tweets*high_q)
+
+calculate_predict <- predict(lm_2d, tibble(high_q = 1, total_tweets = 84))
+
+calculate_predict
+```
+
+2E)
+The total_tweets coefficient would be the outcome of approval rating for every tweet sent (all else held equal), and the democrat coefficient would similarly be the outcome of approval rating from whether or not a person is a democrat (all else held equal). The total_tweets:democrat coefficient would be the outcome of approval rating from total tweets for those who are Democrats. This would be a predictive model, as the units of observation- each of the 12 weeks- is randomly assigned the treatment condition of low tweet volume or high tweet volume. The differences in outcomes between weeks that receive treatment and those that do not would be the average treatment effect of a high or low-volume tweet week on democrats' approval rating of the President.
+
+
+3) 
+
+```{r q3, include = TRUE}
+poll$month <- ceiling(poll$week/4)
+tweets$month <- ceiling(tweets$week/4)
+
+# decided to rejoin tibbles so that I didn't duplicate month variable
+
+data_q3 <- left_join(poll, tweets, by = c("month", "week")) %>%
+  mutate(total_tweets = replace_na(total_tweets, 0)) %>%
+  filter(month <= 11)
+
+# graph display approval rating by poll quality over time
+
+approval_graph <- data_q3 %>%
+  
+  # use same code as before to create high_q variable
+  
+  mutate(high_q = map_dbl(grade %in% c("A+", "A", "A-"), 1, 0)) %>%
+  select(month, approve, high_q) %>%
+  group_by(month, high_q) %>%
+  summarize(avg_approval = mean(approve)) %>%
+  ggplot(aes(x = month, y = avg_approval, color = as.factor(high_q))) +
+  geom_line() +
+  
+  # had to go to documentation to find out how to relabel legend elements
+  
+  scale_color_manual(labels = c("Lower than A- or missing","A- or higher"), values = c("blue", "red")) +
+  labs(title = "Approval Rating by Poll Quality", x = "Month", y = "Average Approval Rating", color = "Poll Quality") + 
+  theme_classic()
+
+tweets_graph <- tweets %>%
+  filter(month <= 11 & month > 0) %>%
+  select(month, total_tweets) %>%
+  group_by(month) %>%
+  summarise(total_tweets_per_month = sum(total_tweets)) %>%
+  ggplot(aes(x = as.factor(month), y = total_tweets_per_month)) +
+  geom_col() +
+  labs(title = "Total Tweets by\n President Trump", x = "Month", y = "Tweets")
+
+
+total_tweets_effect_graph <- data_q3 %>%
+  mutate(high_q = map_dbl(grade %in% c("A+", "A", "A-"), 1, 0)) %>%
+  
+  # pretty much followed the pset's directions for this part
+  
+  group_by(month) %>%
+  nest() %>%
+  mutate(mod = map(data, ~ lm(approve ~ total_tweets + high_q, .))) %>%
+  mutate(reg_results = map(data, ~ lm(approve ~ total_tweets + high_q, .) %>% tidy())) %>%
+  
+  # there is probably a more efficient way to get these values, but this worked, so I ran with it
+  
+  mutate(estimate = map_dbl(reg_results, ~ .$estimate[2]),
+         std_error = map_dbl(reg_results, ~ .$std.error[2]),
+         lower = map_dbl(reg_results, ~ (.$estimate[2] - 1.96*.$std.error[2])),
+         upper = map_dbl(reg_results, ~ (.$estimate[2] + 1.96*.$std.error[2]))) %>%
+  ggplot(aes(x = month, y = estimate)) +
+  geom_point(color = "orange") +
+  geom_errorbar(aes(x = month, ymin = lower, ymax = upper), color = "orange") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Month", y = "Coefficient", title = "Effect of Total Tweets\non Estimated Approval Rating", subtitle = "Controlling for Poll Quality") +
+  theme_bw()
+
+
+# repeat same process to get error bar graph for poll quality
+
+poll_quality_effect_graph <- data_q3 %>%
+  mutate(high_q = map_dbl(grade %in% c("A+", "A", "A-"), 1, 0)) %>%
+  
+  # pretty much followed the pset's directions for this part
+  
+  group_by(month) %>%
+  nest() %>%
+  mutate(mod = map(data, ~ lm(approve ~ total_tweets + high_q, .))) %>%
+  mutate(reg_results = map(data, ~ lm(approve ~ total_tweets + high_q, .) %>% tidy())) %>%
+  
+  # there is probably a more efficient way to get these values, but this worked, so I ran with it
+  # to get poll quality, get the third position in the tibble instead of the 2nd
+  
+  mutate(estimate = map_dbl(reg_results, ~ .$estimate[3]),
+         std_error = map_dbl(reg_results, ~ .$std.error[3]),
+         lower = map_dbl(reg_results, ~ (.$estimate[3] - 1.96*.$std.error[3])),
+         upper = map_dbl(reg_results, ~ (.$estimate[3] + 1.96*.$std.error[3]))) %>%
+  ggplot(aes(x = month, y = estimate)) +
+  geom_point(color = "green") +
+  geom_errorbar(aes(x = month, ymin = lower, ymax = upper), color = "green") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Month", y = "Coefficient", title = "Effect of Poll Quality\non Estimated Approval\n Rating", subtitle = "Controlling for Total Tweets") +
+  theme_bw()
+
+approval_graph + tweets_graph + total_tweets_effect_graph + poll_quality_effect_graph
+```
+
+
+
+
+
